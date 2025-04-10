@@ -77,8 +77,8 @@ class gz::sim::systems::JointControllerPrivate
   /// velocity.
   public: bool useForceCommands{false};
 
-  /// \brief Velocity PID controller.
-  public: math::PID velPid;
+  /// \brief Joint Velociity PID component
+  public: Entity velPid; 
 };
 
 //////////////////////////////////////////////////
@@ -144,7 +144,9 @@ void JointController::Configure(const Entity &_entity,
     double cmdMin    = _sdf->Get<double>("cmd_min",   -1000.0).first;
     double cmdOffset = _sdf->Get<double>("cmd_offset", 0.0).first;
 
-    this->dataPtr->velPid.Init(p, i, d, iMax, iMin, cmdMax, cmdMin, cmdOffset);
+
+    math::PID velPID(p, i, d, iMax, iMin, cmdMax, cmdMin, cmdOffset);
+    this->dataPtr->velPid = components::JointVelocityControlPID({velPID});
 
     gzdbg << "[JointController] Force mode with parameters:" << std::endl;
     gzdbg << "p_gain: ["     << p         << "]"             << std::endl;
@@ -256,7 +258,7 @@ void JointController::Configure(const Entity &_entity,
 }
 
 //////////////////////////////////////////////////
-void JointController::PreUpdate(const UpdateInfo &_info,
+void JointController::PreUpdate(const Update`Info &_info,
     EntityComponentManager &_ecm)
 {
   GZ_PROFILE("JointController::PreUpdate");
@@ -278,6 +280,24 @@ void JointController::PreUpdate(const UpdateInfo &_info,
       Entity joint = this->dataPtr->model.JointByName(_ecm, name);
       if (joint != kNullEntity)
       {
+        auto jointController = _ecm.Component<componnets::JointController>(
+            joint);
+        if(!jointController)
+        {
+          _ecm.CreateComponent(joint, components::JointController());
+        }
+
+        auto jointContollerVelocityPID = 
+            _ecm.Component<componnets::JointVelocityControlPID>(
+            joint);
+        if(!jointContollerVelocityPID)
+        {
+          _ecm.CreateComponent(jointController, 
+              this->dataPtr->controllerPid);
+        }
+
+        auto JointVelocityControlTarget = _ecm.Component<componnets::JointController>(
+            joint);
         this->dataPtr->jointEntities.push_back(joint);
       }
       else if (!warned)
@@ -294,6 +314,9 @@ void JointController::PreUpdate(const UpdateInfo &_info,
   if (_info.paused)
     return;
 
+  // this logic should go inside joint controller 
+
+
   // Create joint velocity component if one doesn't exist
   auto jointVelComp = _ecm.Component<components::JointVelocity>(
       this->dataPtr->jointEntities[0]);
@@ -309,6 +332,16 @@ void JointController::PreUpdate(const UpdateInfo &_info,
     return;
 
   double targetVel;
+
+  for ()
+  auto jointController = 
+      _ecm.Component<components::JointController>(
+          this->dataPtr->jointEntities[0]);
+
+  auto jointVelocityControlTarget = 
+      _ecm.Component<components::jointVelocityControlTarget>(
+          jointController)
+
   {
     std::lock_guard<std::mutex> lock(this->dataPtr->jointVelCmdMutex);
     targetVel = this->dataPtr->jointVelCmd;
@@ -316,37 +349,49 @@ void JointController::PreUpdate(const UpdateInfo &_info,
 
   double error = jointVelComp->Data().at(0) - targetVel;
 
-  // Force mode.
-  if ((this->dataPtr->useForceCommands) &&
-      (!jointVelComp->Data().empty()))
+  // this will go inside joint controller update method 
+  for (Entity joint: this->dataPtr->jointEntities)
   {
-    for (Entity joint : this->dataPtr->jointEntities)
-    {
-      // Update force command.
-      double force = this->dataPtr->velPid.Update(error, _info.dt);
+    JointController jointController = _ecm.Component<components::JointController>(
+      joint)
+    
+    _ecm.SetComponentData<components::JointVelocityControlTarget>(jointController, {targetVel});
+    jointController.Update(this->dataPtr->useForceCommands, _info.dt)
+  }
 
-      auto forceComp =
-          _ecm.Component<components::JointForceCmd>(joint);
-      if (forceComp == nullptr)
-      {
-        _ecm.CreateComponent(joint,
-                            components::JointForceCmd({force}));
-      }
-      else
-      {
-        *forceComp = components::JointForceCmd({force});
-      }
-    }
-  }
-  // Velocity mode.
-  else if (!this->dataPtr->useForceCommands)
-  {
-    // Update joint velocity
-    for (Entity joint : this->dataPtr->jointEntities)
-    {
-      _ecm.SetComponentData<components::JointVelocityCmd>(joint, {targetVel});
-    }
-  }
+  // this logic will go into joint controller API
+  // // Force mode.
+  // if ((this->dataPtr->useForceCommands) &&
+  //     (!jointVelComp->Data().empty()))
+  // {
+  //   for (Entity joint : this->dataPtr->jointEntities)
+  //   {
+  //     // Update force command.
+
+  //     double force = this->dataPtr->velPid->Data().Update(error, _info.dt);
+      
+  //     auto forceComp =
+  //         _ecm.Component<components::JointForceCmd>(joint);
+  //     if (forceComp == nullptr)
+  //     {
+  //       _ecm.CreateComponent(joint,
+  //                           components::JointForceCmd({force}));
+  //     }
+  //     else
+  //     {
+  //       *forceComp = components::JointForceCmd({force});
+  //     }
+  //   }
+  // }
+  // // Velocity mode.
+  // else if (!this->dataPtr->useForceCommands)
+  // {
+  //   // Update joint velocity
+  //   for (Entity joint : this->dataPtr->jointEntities)
+  //   {
+  //     _ecm.SetComponentData<components::JointVelocityCmd>(joint, {targetVel});
+  //   }
+  // }
 }
 
 //////////////////////////////////////////////////

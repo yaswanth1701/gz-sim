@@ -79,8 +79,8 @@ class gz::sim::systems::JointPositionControllerPrivate
   /// \brief True if using Actuator msg to control joint position.
   public: bool useActuatorMsg{false};
 
-  /// \brief Position PID controller.
-  public: math::PID posPid;
+  /// \brief Joint Positoin PID component
+  public: Entity controllerPid; 
 
   /// \brief Joint index to be used.
   public: unsigned int jointIndex = 0u;
@@ -198,8 +198,8 @@ void JointPositionController::Configure(const Entity &_entity,
     }
   }
 
-  this->dataPtr->posPid.Init(p, i, d, iMax, iMin, cmdMax, cmdMin, cmdOffset);
-
+  math::PID posPID(p, i, d, iMax, iMin, cmdMax, cmdMin, cmdOffset);
+  this->dataPtr->controllerPid = components::JointVelocityControlPID({posPID});
 
   if (_sdf->HasElement("initial_position"))
   {
@@ -380,6 +380,22 @@ void JointPositionController::PreUpdate(
 
       if (joint != kNullEntity)
       {
+        auto jointController = _ecm.Component<componnets::JointController>(
+            joint);
+        if(!jointController)
+        {
+          _ecm.CreateComponent(joint, components::JointController());
+        }
+
+        auto jointContollerPositionPID = 
+            _ecm.Component<componnets::JointPositionControlPID>(
+            joint);
+        if(!jointContollerPositionPID)
+        {
+          _ecm.CreateComponent(jointController, 
+              this->dataPtr->controllerPid);
+        }
+
         this->dataPtr->jointEntities.push_back(joint);
       }
       else if (!warned)
@@ -395,6 +411,8 @@ void JointPositionController::PreUpdate(
   // Nothing left to do if paused.
   if (_info.paused)
     return;
+
+  // (TODO)@yaswanth this logic should go inside the joint controller api 
 
   // Create joint position component if one doesn't exist
   auto jointPosComp = _ecm.Component<components::JointPosition>(
