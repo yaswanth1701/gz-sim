@@ -75,6 +75,7 @@ set (sources
   EntityComponentManagerDiff.cc
   InstallationDirectories.cc
   Joint.cc
+  JointController.cc
   LevelManager.cc
   Light.cc
   Link.cc
