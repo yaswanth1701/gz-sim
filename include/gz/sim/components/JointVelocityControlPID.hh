@@ -35,7 +35,7 @@ namespace components
   /// \brief Joint positions in SI units (rad for revolute, m for prismatic).
   /// The component wraps a std::vector of size equal to the degrees of freedom
   /// of the joint.
-  using JointVelocityControlPID = Component<math::PID, class JointPositionControlTarget>;
+  using JointVelocityControlPID = Component<math::PID, class JointVelocityControlPIDTag>;
   GZ_SIM_REGISTER_COMPONENT(
       "gz_sim_components.JointVelocityPID", JointVelocityControlPID)
 }

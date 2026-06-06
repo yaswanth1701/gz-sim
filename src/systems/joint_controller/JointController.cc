@@ -37,11 +37,10 @@
 #include "gz/sim/components/JointVelocity.hh"
 #include "gz/sim/components/JointVelocityCmd.hh"
 #include "gz/sim/Model.hh"
+#include "gz/sim/JointController.hh"
 #include "gz/sim/Util.hh"
 
 using namespace gz;
-using namespace sim;
-using namespace systems;
 
 class gz::sim::systems::JointControllerPrivate
 {
@@ -61,6 +60,12 @@ class gz::sim::systems::JointControllerPrivate
 
   /// \brief Joint name
   public: std::vector<std::string> jointNames;
+  
+  /// \brief Joint controller interface
+  public: std::vector<sim::JointController> jointControllers;
+  
+  /// \brief PID controller for velocity
+  public: math::PID velPid;
 
   /// \brief Commanded joint velocity
   public: double jointVelCmd{0.0};
@@ -83,19 +88,16 @@ class gz::sim::systems::JointControllerPrivate
 
   /// \brief True if braking is disabled.
   public: bool disableBraking{false};
-
-  /// \brief Velocity PID controller.
-  public: math::PID velPid;
 };
 
 //////////////////////////////////////////////////
-JointController::JointController()
+sim::systems::JointController::JointController()
   : dataPtr(std::make_unique<JointControllerPrivate>())
 {
 }
 
 //////////////////////////////////////////////////
-void JointController::Configure(const Entity &_entity,
+void sim::systems::JointController::Configure(const Entity &_entity,
     const std::shared_ptr<const sdf::Element> &_sdf,
     EntityComponentManager &_ecm,
     EventManager &/*_eventMgr*/)
@@ -270,7 +272,7 @@ void JointController::Configure(const Entity &_entity,
 }
 
 //////////////////////////////////////////////////
-void JointController::PreUpdate(const UpdateInfo &_info,
+void sim::systems::JointController::PreUpdate(const UpdateInfo &_info,
     EntityComponentManager &_ecm)
 {
   GZ_PROFILE("JointController::PreUpdate");
@@ -286,6 +288,7 @@ void JointController::PreUpdate(const UpdateInfo &_info,
   // If the joints haven't been identified yet, look for them
   if (this->dataPtr->jointEntities.empty())
   {
+    this->dataPtr->jointControllers.clear();
     bool warned{false};
     for (const std::string &name : this->dataPtr->jointNames)
     {
@@ -328,6 +331,13 @@ void JointController::PreUpdate(const UpdateInfo &_info,
         warned = true;
       }
     }
+    for (Entity entity: this->dataPtr->jointEntities)
+    {
+      this->dataPtr->jointControllers.push_back(sim::JointController(entity));
+      // update PID values for all joints 
+      this->dataPtr->jointControllers.back().SetJointVelocityControlPID(_ecm, 
+                            this->dataPtr->velPid);
+    }
   }
 
   if (this->dataPtr->jointEntities.empty())
@@ -337,7 +347,6 @@ void JointController::PreUpdate(const UpdateInfo &_info,
   if (_info.paused)
     return;
 
-  // Create joint velocity component if one doesn't exist
   auto jointVelComp = _ecm.Component<components::JointVelocity>(
       this->dataPtr->jointEntities[0]);
   if (!jointVelComp)
@@ -346,15 +355,17 @@ void JointController::PreUpdate(const UpdateInfo &_info,
         components::JointVelocity());
   }
 
-  // We just created the joint velocity component, give one iteration for the
-  // physics system to update its size
-  if (jointVelComp == nullptr || jointVelComp->Data().empty())
-    return;
-
   double targetVel;
   {
     std::lock_guard<std::mutex> lock(this->dataPtr->jointVelCmdMutex);
     targetVel = this->dataPtr->jointVelCmd;
+  }
+
+  // TODO(yaswanth1701): Check for most recent velocity command between API and callback
+  // update target control velocity for all joints
+  for (auto jointController: this->dataPtr->jointControllers)
+  {
+    jointController.SetJointVelocityTarget(_ecm, targetVel);
   }
 
   double error = jointVelComp->Data().at(0) - targetVel;
@@ -376,18 +387,22 @@ void JointController::PreUpdate(const UpdateInfo &_info,
     for (Entity joint : this->dataPtr->jointEntities)
     {
       // Update force command.
-      double force = this->dataPtr->velPid.Update(error, _info.dt);
+      // only taking first joint target value as all the others joints are 
+      // expected to be the indentical
+      std::optional<double> force = 
+          this->dataPtr->jointControllers[0].UpdateVelocityPid(_ecm, _info.dt);
 
       auto forceComp =
           _ecm.Component<components::JointForceCmd>(joint);
+      /// above checks make sure force always has value
       if (forceComp == nullptr)
       {
         _ecm.CreateComponent(joint,
-                            components::JointForceCmd({force}));
+                            components::JointForceCmd({force.value()}));
       }
       else
       {
-        *forceComp = components::JointForceCmd({force});
+        *forceComp = components::JointForceCmd({force.value()});
       }
     }
   }
@@ -403,13 +418,13 @@ void JointController::PreUpdate(const UpdateInfo &_info,
 }
 
 //////////////////////////////////////////////////
-void JointControllerPrivate::OnCmdVel(const msgs::Double &_msg)
+void sim::systems::JointControllerPrivate::OnCmdVel(const msgs::Double &_msg)
 {
   std::lock_guard<std::mutex> lock(this->jointVelCmdMutex);
   this->jointVelCmd = _msg.data();
 }
 
-void JointControllerPrivate::OnActuatorVel(const msgs::Actuators &_msg)
+void sim::systems::JointControllerPrivate::OnActuatorVel(const msgs::Actuators &_msg)
 {
   std::lock_guard<std::mutex> lock(this->jointVelCmdMutex);
   if (this->actuatorNumber > _msg.velocity_size() - 1)
@@ -423,10 +438,10 @@ void JointControllerPrivate::OnActuatorVel(const msgs::Actuators &_msg)
   this->jointVelCmd = static_cast<double>(_msg.velocity(this->actuatorNumber));
 }
 
-GZ_ADD_PLUGIN(JointController,
-                    System,
-                    JointController::ISystemConfigure,
-                    JointController::ISystemPreUpdate)
+GZ_ADD_PLUGIN(sim::systems::JointController,
+                    sim::System,
+                    sim::systems::JointController::ISystemConfigure,
+                    sim::systems::JointController::ISystemPreUpdate)
 
-GZ_ADD_PLUGIN_ALIAS(JointController,
+GZ_ADD_PLUGIN_ALIAS(sim::systems::JointController,
                           "gz::sim::systems::JointController")

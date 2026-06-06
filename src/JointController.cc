@@ -73,7 +73,7 @@ std::optional<double> JointController::UpdateVelocityPid(EntityComponentManager 
     // physics system to update its size
     if (jointVelComp == nullptr || jointVelComp->Data().size() == 0)
     {
-        return;
+        return std::nullopt;
     }
 
     std::optional<double> targetVel = this->JointVelocityTarget(_ecm);
@@ -139,7 +139,6 @@ void JointController::SetJointPositionTarget(EntityComponentManager &_ecm, const
     if (!positionTarget)
     {
         _ecm.CreateComponent(this->dataPtr->id, components::JointPositionControlTarget(_position));
-
     }
     else
     {
