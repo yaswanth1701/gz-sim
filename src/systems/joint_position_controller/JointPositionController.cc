@@ -25,6 +25,7 @@
 #include <functional>
 #include <memory>
 #include <ostream>
+#include <optinal>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -42,6 +43,7 @@
 #include "gz/sim/components/JointForceCmd.hh"
 #include "gz/sim/components/JointVelocityCmd.hh"
 #include "gz/sim/components/JointPosition.hh"
+#include "gz/sim/JointController.hh"
 #include "gz/sim/Model.hh"
 #include "gz/sim/Util.hh"
 
@@ -161,6 +163,9 @@ class gz::sim::systems::JointPositionControllerPrivate
 
   /// \brief Joint Entity
   public: std::vector<Entity> jointEntities;
+
+  /// \brief Joint controller interface
+  public: std::vector<JointController> jointControllers;
 
   /// \brief Joint name
   public: std::vector<std::string> jointNames;
@@ -481,6 +486,13 @@ void JointPositionController::ConfigureParameters(
         gzwarn << "Failed to find joint [" << name << "]\n";
         warned = true;
       }
+      for (Entity entity: this->dataPtr->jointEntities)
+      {
+        this->dataPtr->jointControllers.push_back(sim::JointController(entity));
+        // update PID values for all joints 
+        this->dataPtr->jointControllers.back().SetJointVelocityControlPID(_ecm, 
+                              this->dataPtr->posPid);
+      }
     }
   }
 
@@ -563,6 +575,13 @@ void JointPositionController::PreUpdate(
     this->dataPtr->cmdMin.Update();
     this->dataPtr->cmdOffset.Update();
   }
+   
+  // TODO(yaswanth1701) check for timestamp mismatach between API and callback
+  // Update PID values for all joints 
+  for (auto &controller : this->dataPtr->jointControllers)
+  {
+    controller.SetJointVelocityControlPID(_ecm, this->dataPtr->posPid);
+  }
 
   // Create joint position component if one doesn't exist
   auto jointPosComp = _ecm.Component<components::JointPosition>(
@@ -596,11 +615,19 @@ void JointPositionController::PreUpdate(
   }
 
   // Get error in position
-  double error;
+  
+  double targetPos;
   {
     std::lock_guard<std::mutex> lock(this->dataPtr->jointCmdMutex);
-    error = jointPosComp->Data().at(this->dataPtr->jointIndex) -
+    targetPos = this->dataPtr->jointPosCmd; 
+  }
+
+  double error = jointPosComp->Data().at(this->dataPtr->jointIndex) -
             this->dataPtr->jointPosCmd;
+
+  for (auto jointController : this->dataPtr->jointControllers)
+  {
+    jointController.SetJointVelocityTarget(_ecm, targetPos);
   }
 
   // Check if the mode is ABS
@@ -637,18 +664,18 @@ void JointPositionController::PreUpdate(
   for (Entity joint : this->dataPtr->jointEntities)
   {
     // Update force command.
-    double force = this->dataPtr->posPid.Update(error, _info.dt);
+    std::optinal<double> force = this->dataPtr->jointControllers[0].UpdatePositionPid(_ecm, _info.dt);
 
     auto forceComp =
         _ecm.Component<components::JointForceCmd>(joint);
     if (forceComp == nullptr)
     {
       _ecm.CreateComponent(joint,
-                          components::JointForceCmd({force}));
+                          components::JointForceCmd({force.value()}));
     }
     else
     {
-      *forceComp = components::JointForceCmd({force});
+      *forceComp = components::JointForceCmd({force.value()});
     }
   }
 }
