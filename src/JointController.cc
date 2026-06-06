@@ -16,26 +16,29 @@
  */
 
 #include "gz/sim/components/JointPosition.hh"
-#include "gz/sim/components/JointPositionControlPID.h"
-#include "gz/sim/components/JointVelocity.hh
-#include "gz/sim/components/JointVelocityControlPID.h"
+#include "gz/sim/components/JointPositionControlTarget.hh"
+#include "gz/sim/components/JointPositionControlPID.hh"
+#include "gz/sim/components/JointVelocity.hh"
+#include "gz/sim/components/JointVelocityControlTarget.hh"
+#include "gz/sim/components/JointVelocityControlPID.hh"
+#include "gz/sim/components/Name.hh"
 
 #include "gz/sim/JointController.hh"
 
-using namespace gz 
-using namespace sim
+using namespace gz;
+using namespace sim;
 
 class gz::sim::JointController::Implementation
 {
     /// \brief Id to joint entity
-    public: Entity id{kNullEntity};
+    public: sim::Entity id{kNullEntity};
     public: math::PID posPid;
     public: math::PID velPid;
     public: unsigned int index = 0;
-}
+};
 
 JointController::JointController(sim::Entity _entity)
-  : dataPtr(std::make_unique<JointControllerPrivate>())
+  : dataPtr(utils::MakeImpl<Implementation>())
 {
   this->dataPtr->id = _entity;
 }
@@ -61,9 +64,9 @@ std::optional<double> JointController::UpdateVelocityPid(EntityComponentManager 
 {
     auto jointVelComp = _ecm.Component<components::JointVelocity>(this->dataPtr->id);
 
-    if (!joinVelComp)
+    if (!jointVelComp)
     {
-        _ecm.CreateComponent<components::JointVelocity>(this->dataPtr->id);
+        _ecm.CreateComponent(this->dataPtr->id, components::JointVelocity());
     }
 
     // We just created the joint velocity component, give one iteration for the
@@ -73,67 +76,69 @@ std::optional<double> JointController::UpdateVelocityPid(EntityComponentManager 
         return;
     }
 
-    std::optional<std::vector<double>> targetVel = this->JointVelocityTarget(_ecm);
+    std::optional<double> targetVel = this->JointVelocityTarget(_ecm);
+    double error;
 
     if (targetVel.has_value())
     {
-        double error = jointVelComp->Data().at(0) - targetVel.value();
+        error = jointVelComp->Data().at(0) - targetVel.value();
     }
     else
     {
         gzwarn << "No velocity target found for joint [" << 
                _ecm.Component<components::Name>(this->dataPtr->id)->Data() 
-               "] "<< std::endl;
+               << "] "<< std::endl;
 
         return std::nullopt;
     }
 
-    return std::optional<double>(this-dataPtr->velPid.Update(error, _dt));
+    return std::optional<double>(this->dataPtr->velPid.Update(error, _dt));
 }
 
 
 std::optional<double> JointController::UpdatePositionPid(EntityComponentManager &_ecm, const std::chrono::duration<double> &_dt) 
 {
-    auto jointPosComp = _ecm.Component<components::JointVelocity>(this->dataPtr->id);
+    auto jointPosComp = _ecm.Component<components::JointPosition>(this->dataPtr->id);
 
-    if (!joinPosComp)
+    if (!jointPosComp)
     {
-        _ecm.CreateComponent<components::JointVelocity>(this->dataPtr->id);
+        _ecm.CreateComponent(this->dataPtr->id, components::JointPosition());
     }
 
     // We just created the joint position component, give one iteration for the
     // physics system to update its size
-    if (jointVelComp == nullptr || jointVelComp->Data().size() == 0)
+    if (jointPosComp == nullptr || jointPosComp->Data().size() == 0)
     {
         return std::nullopt;
     }
 
-    std::optional<std::vector<double>> targetPos = this->JointPositionTarget(_ecm);
+    std::optional<double> targetPos = this->JointPositionTarget(_ecm);
+    double error;
 
     if (targetPos.has_value())
     {
         unsigned int index = this->dataPtr->index;
-        double error = jointVelComp->Data().at(index) - targetPos.value();
+        error = jointPosComp->Data().at(index) - targetPos.value();
     }
     else
     {
         gzwarn << "No position target found for joint [" << 
                _ecm.Component<components::Name>(this->dataPtr->id)->Data() 
-               "] "<< std::endl;
+               << "] "<< std::endl;
 
         return std::nullopt;
     }
 
-    return std::optional<double>(this-dataPtr->velPid.Update(error, _dt));
+    return std::optional<double>(this->dataPtr->velPid.Update(error, _dt));
 }
 
 void JointController::SetJointPositionTarget(EntityComponentManager &_ecm, const double &_position)
 {
-    auto positionTarget = _ecm.Component<components::JointPositionTarget>(this->dataPtr->id);
+    auto positionTarget = _ecm.Component<components::JointPositionControlTarget>(this->dataPtr->id);
 
     if (!positionTarget)
     {
-        _ecm.CreateComponent<components::JointPositionTarget>(this->dataPtr->id);
+        _ecm.CreateComponent(this->dataPtr->id, components::JointPositionControlTarget(_position));
 
     }
     else
@@ -144,10 +149,10 @@ void JointController::SetJointPositionTarget(EntityComponentManager &_ecm, const
 
 void JointController::SetJointVelocityTarget(EntityComponentManager &_ecm, const double &_velocity)
 {
-    auto velocityTarget = _ecm.Component<components::JointVelocityTarget>(this->dataPtr->id);
+    auto velocityTarget = _ecm.Component<components::JointVelocityControlTarget>(this->dataPtr->id);
     if (!velocityTarget)
     {
-        _ecm.CreateComponent<components::JointVelocityTarget>(this->dataPtr->id);
+        _ecm.CreateComponent(this->dataPtr->id, components::JointVelocityControlTarget(_velocity));
     }
     else
     {
@@ -184,19 +189,19 @@ void JointController::SetJointVelocityControlPID(EntityComponentManager &_ecm, c
 
 std::optional<double> JointController::JointPositionTarget(const EntityComponentManager &_ecm) const
 {
-    auto positionTarget = _ecm.Component<components::JointPositionTarget>(this->dataPtr->id);
+    auto positionTarget = _ecm.Component<components::JointPositionControlTarget>(this->dataPtr->id);
     if (!positionTarget)
     {
         return std::nullopt;
     }
     
-    return std::optional<double>(positionPid->Data());
+    return std::optional<double>(positionTarget->Data());
 }
 
 std::optional<double> JointController::JointVelocityTarget(const EntityComponentManager &_ecm) const
 {
-    auto velocityTarget = _ecm.Component<components::JointVelocityTarget>(this->dataPtr->id);
-    if (!velocityPid)
+    auto velocityTarget = _ecm.Component<components::JointVelocityControlTarget>(this->dataPtr->id);
+    if (!velocityTarget)
     {
         return std::nullopt;
     }
