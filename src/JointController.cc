@@ -52,7 +52,7 @@ sim::Entity JointController::Entity() const
   return this->dataPtr->id;
 }
 
-bool JointController::setJointIndex(unsigned int _index)
+void  JointController::setJointIndex(unsigned int _index)
 {
     this->dataPtr->index = _index;   
 }
